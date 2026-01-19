@@ -2,13 +2,13 @@
 /*
 Plugin Name: LeadRouter
 Plugin URI: https://vivzon.in/plugins/lead-router/index.html
-Description: Route leads from CF7, Elementor, and custom forms to Vivzon CRM, plus a floating WhatsApp Chat widget and Product Enquiries.
-Version: 1.4
+Description: Route leads from CF7, Elementor, and custom forms to Vivzon CRM, plus Email Alerts, SMS Gateway, WhatsApp Widget and Product Enquiries.
+Version: 1.5
 Author: Sr. Vivek Raj
 Author URI: https://vivzon.in
 */
 
-if ( ! defined( 'ABSPATH' ) ) exit; // Exit if accessed directly
+if ( ! defined( 'ABSPATH' ) ) exit;
 
 // --- 1. Core Function: Send to Vivzon API ---
 
@@ -27,12 +27,40 @@ function vivzon_crm_send_to_api($data) {
         'timeout' => 15,
     ]);
 
+    // Trigger SMS Alert if enabled
+    vivzon_send_sms_notification($data);
+
     if (is_wp_error($response)) {
         error_log("LeadRouter API Error: " . $response->get_error_message());
     }
 }
 
-// --- 2. Admin Menu & Settings ---
+// --- 2. SMS Gateway Integration ---
+
+function vivzon_send_sms_notification($data) {
+    if (get_option('vivzon_sms_enabled') != '1') return;
+
+    $api_url = get_option('vivzon_sms_api_url');
+    $api_key = get_option('vivzon_sms_api_key');
+    $sender  = get_option('vivzon_sms_sender_id');
+    $admin_num = get_option('vivzon_sms_admin_number');
+
+    if (empty($api_url) || empty($admin_num)) return;
+
+    $user_name = $data['name'] ?? 'Customer';
+    $message = "New Lead Received: {$user_name} ({$data['mob']}). Check CRM for details.";
+    
+    // Generic API call structure (Customize keys based on your provider)
+    $final_url = str_replace(
+        ['{api_key}', '{sender}', '{number}', '{message}'],
+        [$api_key, $sender, $admin_num, urlencode($message)],
+        $api_url
+    );
+
+    wp_remote_get($final_url);
+}
+
+// --- 3. Admin Menu & Settings ---
 
 add_action('admin_menu', 'vivzon_crm_menu');
 add_action('admin_init', 'vivzon_crm_settings');
@@ -49,6 +77,14 @@ function vivzon_crm_settings() {
     register_setting('vivzon_crm_group', 'vivzon_wa_position');
     register_setting('vivzon_crm_group', 'vivzon_enquiry_enabled');
     register_setting('vivzon_crm_group', 'vivzon_enquiry_btn_text');
+    
+    // New SMS & Email Settings
+    register_setting('vivzon_crm_group', 'vivzon_admin_email_notify');
+    register_setting('vivzon_crm_group', 'vivzon_sms_enabled');
+    register_setting('vivzon_crm_group', 'vivzon_sms_api_url');
+    register_setting('vivzon_crm_group', 'vivzon_sms_api_key');
+    register_setting('vivzon_crm_group', 'vivzon_sms_sender_id');
+    register_setting('vivzon_crm_group', 'vivzon_sms_admin_number');
 }
 
 function vivzon_crm_settings_page() {
@@ -62,10 +98,35 @@ function vivzon_crm_settings_page() {
                 <h2>🔌 CRM Configuration</h2>
                 <table class="form-table">
                     <tr>
-                        <th scope="row"><label for="vivzon_crm_token">CRM API Token</label></th>
-                        <td>
-                            <input type="text" id="vivzon_crm_token" name="vivzon_crm_token" value="<?php echo esc_attr(get_option('vivzon_crm_token')); ?>" class="regular-text" />
-                        </td>
+                        <th scope="row">CRM API Token</th>
+                        <td><input type="text" name="vivzon_crm_token" value="<?php echo esc_attr(get_option('vivzon_crm_token')); ?>" class="regular-text" /></td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Admin Email for Alerts</th>
+                        <td><input type="email" name="vivzon_admin_email_notify" value="<?php echo esc_attr(get_option('vivzon_admin_email_notify', get_option('admin_email'))); ?>" class="regular-text" /></td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="card" style="max-width: 800px; padding: 20px; margin-top: 20px; border: 1px solid #ccc;">
+                <h2>📱 SMS Gateway Settings</h2>
+                <p>Use placeholders: <code>{api_key}</code>, <code>{sender}</code>, <code>{number}</code>, <code>{message}</code> in the URL.</p>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Enable SMS Alerts</th>
+                        <td><input type="checkbox" name="vivzon_sms_enabled" value="1" <?php checked(1, get_option('vivzon_sms_enabled'), true); ?> /></td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Admin Phone Number</th>
+                        <td><input type="text" name="vivzon_sms_admin_number" value="<?php echo esc_attr(get_option('vivzon_sms_admin_number')); ?>" placeholder="e.g. 919876543210" class="regular-text" /></td>
+                    </tr>
+                    <tr>
+                        <th scope="row">API Gateway URL</th>
+                        <td><input type="text" name="vivzon_sms_api_url" value="<?php echo esc_attr(get_option('vivzon_sms_api_url')); ?>" placeholder="https://api.gateway.com/send?key={api_key}&to={number}&msg={message}" class="regular-text" /></td>
+                    </tr>
+                    <tr>
+                        <th scope="row">API Key / Token</th>
+                        <td><input type="text" name="vivzon_sms_api_key" value="<?php echo esc_attr(get_option('vivzon_sms_api_key')); ?>" class="regular-text" /></td>
                     </tr>
                 </table>
             </div>
@@ -75,16 +136,11 @@ function vivzon_crm_settings_page() {
                 <table class="form-table">
                     <tr>
                         <th scope="row">Enable Enquiry Button</th>
-                        <td>
-                            <input type="checkbox" name="vivzon_enquiry_enabled" value="1" <?php checked(1, get_option('vivzon_enquiry_enabled'), true); ?> />
-                            <label>Show button (Visible even if Add to Cart is hidden)</label>
-                        </td>
+                        <td><input type="checkbox" name="vivzon_enquiry_enabled" value="1" <?php checked(1, get_option('vivzon_enquiry_enabled'), true); ?> /></td>
                     </tr>
                     <tr>
                         <th scope="row">Button Text</th>
-                        <td>
-                            <input type="text" name="vivzon_enquiry_btn_text" value="<?php echo esc_attr(get_option('vivzon_enquiry_btn_text', 'Enquire Now')); ?>" class="regular-text" />
-                        </td>
+                        <td><input type="text" name="vivzon_enquiry_btn_text" value="<?php echo esc_attr(get_option('vivzon_enquiry_btn_text', 'Enquire Now')); ?>" class="regular-text" /></td>
                     </tr>
                 </table>
             </div>
@@ -109,7 +165,7 @@ function vivzon_crm_settings_page() {
     <?php
 }
 
-// --- 3. Frontend WhatsApp Icon Logic ---
+// --- 4. Frontend WhatsApp Icon Logic ---
 
 add_action('wp_footer', 'vivzon_crm_render_whatsapp_icon');
 function vivzon_crm_render_whatsapp_icon() {
@@ -117,12 +173,10 @@ function vivzon_crm_render_whatsapp_icon() {
     $number = get_option('vivzon_wa_number');
     if (empty($number)) return;
     $message = urlencode(get_option('vivzon_wa_message', 'Hello!'));
-    $pos = get_option('vivzon_wa_position', 'right');
-    $side_css = ($pos == 'left') ? 'left: 25px;' : 'right: 25px;';
     $wa_url = "https://wa.me/{$number}?text={$message}";
     ?>
     <style>
-        .vz-wa-float { position: fixed; bottom: 25px; <?php echo $side_css; ?> width: 60px; height: 60px; background-color: #25d366; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 2px 5px 15px rgba(0,0,0,0.3); z-index: 999999; animation: vz-pulse 2s infinite; }
+        .vz-wa-float { position: fixed; bottom: 25px; right: 25px; width: 60px; height: 60px; background-color: #25d366; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 2px 5px 15px rgba(0,0,0,0.3); z-index: 999999; animation: vz-pulse 2s infinite; }
         .vz-wa-float svg { width: 34px; height: 34px; fill: #fff; }
         @keyframes vz-pulse { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
     </style>
@@ -132,14 +186,13 @@ function vivzon_crm_render_whatsapp_icon() {
     <?php
 }
 
-// --- 4. Product Enquiry Popup Logic (Always Display) ---
+// --- 5. Product Enquiry Popup & Admin Email ---
 
-// Hooked to summary instead of after_add_to_cart_button to ensure it shows even if button is hidden
 add_action('woocommerce_single_product_summary', 'vivzon_crm_add_enquiry_button', 35);
 function vivzon_crm_add_enquiry_button() {
     if (get_option('vivzon_enquiry_enabled') != '1') return;
     $btn_text = get_option('vivzon_enquiry_btn_text', 'Enquire Now');
-    echo '<div style="margin-top:15px;"><button type="button" id="vz-enquiry-trigger" class="button alt" style="background-color: #000000; border-color: #000000; color: #fff; border-radius: 5px; min-width: 170px;">'.esc_html($btn_text).'</button></div>';
+    echo '<div style="margin-top:15px;"><button type="button" id="vz-enquiry-trigger" class="button alt" style="background-color: #000000; color: #fff; border-radius: 5px; min-width: 170px;">'.esc_html($btn_text).'</button></div>';
 }
 
 add_action('wp_footer', 'vivzon_crm_enquiry_modal_html');
@@ -151,13 +204,14 @@ function vivzon_crm_enquiry_modal_html() {
     <div id="vz-enquiry-modal" class="vz-modal">
         <div class="vz-modal-content">
             <span class="vz-close">&times;</span>
-            <h3 style="margin-top:0;">Enquire About: <br><small style="color:#007cba;"><?php echo $product->get_name(); ?></small></h3>
+            <h3 style="margin-top:0;">Product Enquiry</h3>
+            <p><strong><?php echo $product->get_name(); ?></strong></p>
             <form id="vz-enquiry-form">
-                <input type="hidden" name="subject" value="Enquiry for product: <?php echo esc_attr($product->get_name()); ?>">
-                <div class="vz-field"><input type="text" name="name" placeholder="Your Name" required></div>
-                <div class="vz-field"><input type="email" name="email" placeholder="Your Email" required></div>
-                <div class="vz-field"><input type="text" name="mob" placeholder="Phone Number" required></div>
-                <div class="vz-field"><textarea name="message" placeholder="I am interested in this product..." rows="3"></textarea></div>
+                <input type="hidden" name="subject" value="Enquiry for: <?php echo esc_attr($product->get_name()); ?>">
+                <div class="vz-field"><input type="text" name="name" placeholder="Name" required></div>
+                <div class="vz-field"><input type="email" name="email" placeholder="Email" required></div>
+                <div class="vz-field"><input type="text" name="mob" placeholder="Phone" required></div>
+                <div class="vz-field"><textarea name="message" placeholder="Your Message..." rows="3"></textarea></div>
                 <button type="submit" id="vz-submit-btn">Send Enquiry</button>
                 <div id="vz-status"></div>
             </form>
@@ -165,12 +219,11 @@ function vivzon_crm_enquiry_modal_html() {
     </div>
     <style>
         .vz-modal { display: none; position: fixed; z-index: 9999999; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.7); }
-        .vz-modal-content { background: #fff; margin: 5% auto; padding: 30px; width: 90%; max-width: 400px; border-radius: 12px; position: relative; box-shadow: 0 5px 20px rgba(0,0,0,0.3); }
-        .vz-close { position: absolute; right: 15px; top: 10px; font-size: 24px; cursor: pointer; color: #999; }
-        .vz-field { margin-bottom: 15px; }
-        .vz-field input, .vz-field textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
-        #vz-submit-btn { width: 100%; padding: 12px; background: #007cba; color: #fff; border: none; cursor: pointer; border-radius: 6px; font-weight: bold; }
-        #vz-status { margin-top: 15px; text-align: center; font-weight: 500; }
+        .vz-modal-content { background: #fff; margin: 10% auto; padding: 25px; width: 90%; max-width: 380px; border-radius: 10px; position: relative; }
+        .vz-close { position: absolute; right: 15px; top: 10px; font-size: 20px; cursor: pointer; }
+        .vz-field { margin-bottom: 12px; }
+        .vz-field input, .vz-field textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        #vz-submit-btn { width: 100%; padding: 10px; background: #007cba; color: #fff; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; }
     </style>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -179,12 +232,10 @@ function vivzon_crm_enquiry_modal_html() {
             var span = document.getElementsByClassName("vz-close")[0];
             if(btn) btn.onclick = function() { modal.style.display = "block"; }
             if(span) span.onclick = function() { modal.style.display = "none"; }
-            window.onclick = function(e) { if (e.target == modal) modal.style.display = "none"; }
-
+            
             document.getElementById('vz-enquiry-form').onsubmit = function(e) {
                 e.preventDefault();
                 var btnSub = document.getElementById('vz-submit-btn');
-                var status = document.getElementById('vz-status');
                 btnSub.disabled = true; btnSub.innerText = 'Sending...';
                 var formData = new FormData(this);
                 formData.append('action', 'vz_handle_enquiry');
@@ -192,12 +243,8 @@ function vivzon_crm_enquiry_modal_html() {
 
                 fetch('<?php echo admin_url('admin-ajax.php'); ?>', { method: 'POST', body: formData })
                 .then(() => {
-                    status.innerHTML = '<span style="color:green;">✅ Enquiry sent! We will contact you soon.</span>';
-                    btnSub.innerText = 'Success';
-                    setTimeout(() => { modal.style.display = "none"; }, 2500);
-                }).catch(() => {
-                    status.innerHTML = '<span style="color:red;">❌ Try again later.</span>';
-                    btnSub.disabled = false;
+                    document.getElementById('vz-status').innerHTML = '✅ Sent Successfully';
+                    setTimeout(() => { modal.style.display = "none"; }, 2000);
                 });
             };
         });
@@ -216,11 +263,26 @@ function vz_handle_enquiry() {
         'message' => sanitize_textarea_field($_POST['message']),
         'website' => esc_url($_POST['website'])
     ];
+
+    // 1. Send to CRM
     vivzon_crm_send_to_api($payload);
+
+    // 2. Send Email to Admin
+    $admin_email = get_option('vivzon_admin_email_notify', get_option('admin_email'));
+    $email_subject = "New Product Enquiry: " . $payload['name'];
+    $email_body = "You have a new lead:\n\n" . 
+                  "Name: {$payload['name']}\n" .
+                  "Email: {$payload['email']}\n" .
+                  "Phone: {$payload['mob']}\n" .
+                  "Subject: {$payload['subject']}\n" .
+                  "Message: {$payload['message']}";
+    
+    wp_mail($admin_email, $email_subject, $email_body);
+
     wp_send_json_success();
 }
 
-// --- 5. Contact Form 7 Integration ---
+// --- 6. Contact Form 7 & Elementor Integrations (Same as before) ---
 
 add_action('wpcf7_mail_sent', 'vivzon_crm_c7_submission');
 function vivzon_crm_c7_submission($contact_form) {
@@ -237,8 +299,6 @@ function vivzon_crm_c7_submission($contact_form) {
 	];
     vivzon_crm_send_to_api($payload);
 }
-
-// --- 6. Elementor Pro Forms Integration ---
 
 add_action('elementor_pro/forms/new_record', 'vivzon_crm_elementor_submission', 10, 2);
 function vivzon_crm_elementor_submission($record, $handler) {
